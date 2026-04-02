@@ -1,2 +1,6 @@
+.vscode
+__pycache__
 /competition_data/
 /output/
+config.yaml
+config.yaml.example
