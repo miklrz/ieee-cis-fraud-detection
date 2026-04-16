@@ -6,6 +6,8 @@ from sklearn.metrics import roc_auc_score
 import lightgbm as lgb
 from clearml import Task
 from tqdm import tqdm
+from pathlib import Path
+import joblib
 import gc
 
 
@@ -20,7 +22,14 @@ def init_clearml_task(config, params):
 
 
 def train_lgbm_cv(
-    X_pd, y_pd, X_test_pd, params, n_fold=5, cat_cols_idx=None, task: Task = None
+    X_pd,
+    y_pd,
+    X_test_pd,
+    params,
+    n_fold=5,
+    cat_cols_idx=None,
+    task: Task = None,
+    output_dir: Path = None,
 ):
     tscv = TimeSeriesSplit(n_splits=n_fold)
 
@@ -30,6 +39,8 @@ def train_lgbm_cv(
 
     feature_importances = pd.DataFrame({"feature": X_pd.columns})
     logger = task.get_logger() if task else None
+
+    save_models_dir = get_next_run_dir(output_dir)
 
     for fold_n, (train_index, valid_index) in tqdm(
         enumerate(tscv.split(X_pd, y_pd)), total=n_fold
@@ -58,7 +69,7 @@ def train_lgbm_cv(
                     tqdm_callback(pbar),
                     make_clearml_callback(logger, fold_n),
                     lgb.early_stopping(200, verbose=False),
-                    lgb.log_evaluation(-1),  # отключи стандартный лог чтобы не мешал
+                    lgb.log_evaluation(-1),
                 ],
             )
 
@@ -71,6 +82,11 @@ def train_lgbm_cv(
         print(f"Fold {fold_n + 1} | AUC: {auc:.6f}")
 
         y_preds += clf.predict(X_test_pd) / n_fold
+
+        model_name = f"fold_{fold_n + 1}_model.txt"
+        output_folder_path = save_models_dir / model_name
+        clf.save_model(str(output_folder_path))
+        print(f"Модель {model_name} сохранена")
 
         # Очистка
         del clf, train_data, valid_data, X_train, X_valid, y_train, y_valid
