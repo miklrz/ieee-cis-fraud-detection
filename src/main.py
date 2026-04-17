@@ -3,7 +3,7 @@ from src.load import load_data, rename_test_cols
 from src.preprocess import get_x_y, clean_inf_nan, encode_cat_cols
 from src.constants import cat_cols, te_cols
 from src.train import init_clearml_task, train_lgbm_cv, save_importances_and_submission
-from src.helpers import get_folder_from_num
+from src.helpers import get_folder_from_num, get_next_run_dir
 from pathlib import Path
 import lightgbm as lgb
 import os
@@ -25,8 +25,8 @@ def main(parser):
     DATASET_DIR = Path(config.get("base_dir")) / "competition_data"
 
     args = parser.parse_args()
-    if (not args.train and not args.eval) or (args.train and args.eval):
-        raise AttributeError("Выберите либо train либо eval")
+    if not args.train:
+        raise AttributeError("Выберите train")
 
     if args.train:
         print("Начало процесса train")
@@ -78,6 +78,8 @@ def main(parser):
         gc.collect()
 
         task = init_clearml_task(config, lgbm_params)
+
+        output_folder = get_next_run_dir(OUTPUT_DIR)
         print("Начало обучения")
         y_preds, y_oof, feature_importances, mean_auc = train_lgbm_cv(
             X_pd,
@@ -86,25 +88,18 @@ def main(parser):
             lgbm_params,
             n_fold=config.get("n_fold"),
             cat_cols_idx=None,
-            output_dir=OUTPUT_DIR,
+            output_folder_path=output_folder,
+            task=task,
         )
         task.close()
         print("Сохранение Feature importances и Submission файлов")
         sub["isFraud"] = y_preds
         save_importances_and_submission(
-            sub, feature_importances, n_fold=config.get("n_fold"), output_dir=OUTPUT_DIR
+            sub,
+            feature_importances,
+            n_fold=config.get("n_fold"),
+            output_folder_path=output_folder,
         )
-    elif args.eval:
-        print("Начало процесса eval")
-        eval_run = args.eval_run
-        dir = get_folder_from_num(eval_run)
-        models = [
-            f
-            for f in os.listdir(dir)
-            if (os.path.isfile(os.path.join(dir, f)) and f.endswith("model.txt"))
-        ]
-        for model in models:
-            clf = lgb.Booster(model)
 
 
 if __name__ == "__main__":
@@ -114,6 +109,4 @@ if __name__ == "__main__":
         epilog="Text at the bottom of help",
     )
     parser.add_argument("-t", "--train", action="store_true")
-    parser.add_argument("-e", "--eval", action="store_true")
-    parser.add_argument("--eval_run")
     main(parser)

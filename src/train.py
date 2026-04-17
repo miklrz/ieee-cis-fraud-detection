@@ -1,4 +1,4 @@
-from src.helpers import get_next_run_dir
+from src.helpers import get_next_run_dir, get_folder_from_num
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
@@ -7,8 +7,10 @@ import lightgbm as lgb
 from clearml import Task
 from tqdm import tqdm
 from pathlib import Path
+from typing import List
 import joblib
 import gc
+import os
 
 
 def init_clearml_task(config, params):
@@ -29,7 +31,7 @@ def train_lgbm_cv(
     n_fold=5,
     cat_cols_idx=None,
     task: Task = None,
-    output_dir: Path = None,
+    output_folder_path: Path = None,
 ):
     tscv = TimeSeriesSplit(n_splits=n_fold)
 
@@ -39,8 +41,6 @@ def train_lgbm_cv(
 
     feature_importances = pd.DataFrame({"feature": X_pd.columns})
     logger = task.get_logger() if task else None
-
-    save_models_dir = get_next_run_dir(output_dir)
 
     for fold_n, (train_index, valid_index) in tqdm(
         enumerate(tscv.split(X_pd, y_pd)), total=n_fold
@@ -78,15 +78,43 @@ def train_lgbm_cv(
         y_pred_valid = clf.predict(X_valid)
         y_oof[valid_index] = y_pred_valid
         auc = roc_auc_score(y_valid, y_pred_valid)
+
+        try:
+            if logger:
+                logger.report_scalar(
+                    "Cross-Validation",
+                    f"Fold {fold_n+1} - AUC",
+                    value=auc,
+                    iteration=fold_n,
+                )
+            else:
+                print("Logger is undefined")
+        except Exception as e:
+            print(f"Не удалось записать метрику: {e}")
+
         scores.append(auc)
         print(f"Fold {fold_n + 1} | AUC: {auc:.6f}")
 
         y_preds += clf.predict(X_test_pd) / n_fold
 
-        model_name = f"fold_{fold_n + 1}_model.txt"
-        output_folder_path = save_models_dir / model_name
-        clf.save_model(str(output_folder_path))
-        print(f"Модель {model_name} сохранена")
+        try:
+            model_name = f"fold_{fold_n + 1}_model.txt"
+            output_folder_path_for_save = output_folder_path / model_name
+            clf.save_model(str(output_folder_path_for_save))
+            print(f"Модель {model_name} сохранена")
+        except Exception as e:
+            print(f"Не удалось сохранить модель на диск: {e}")
+
+        try:
+            if logger:
+                task.upload_artifact(
+                    name=f"model_fold_{fold_n+1}",
+                    artifact_object=str(output_folder_path_for_save),
+                )
+            else:
+                print("Logger is undefined")
+        except Exception as e:
+            print(f"Не удалось записать артефакт в clearml: {e}")
 
         # Очистка
         del clf, train_data, valid_data, X_train, X_valid, y_train, y_valid
@@ -97,9 +125,17 @@ def train_lgbm_cv(
     print(f"\nMean AUC = {mean_auc:.6f}")
     print(f"Out-of-Folds AUC = {oof_auc:.6f}")
 
-    if logger:
-        logger.report_scalar("Summary", "Mean AUC", mean_auc, iteration=0)
-        logger.report_scalar("Summary", "OOF AUC", oof_auc, iteration=0)
+    try:
+        if logger:
+            logger.report_scalar("Summary", "Mean AUC", mean_auc, iteration=5)
+            logger.report_scalar("Summary", "OOF AUC", oof_auc, iteration=5)
+            logger.report_single_value("Mean AUC", mean_auc)
+            logger.report_single_value("OOF AUC", oof_auc)
+            print("Metrics sent to clearml")
+        else:
+            print("Logger is undefined")
+    except Exception as e:
+        print(f"Не удалось записать метрику: {e}")
 
     if task:
         fi = feature_importances.copy()
@@ -142,8 +178,9 @@ def make_clearml_callback(logger, fold_n):
     return clearml_callback
 
 
-def save_importances_and_submission(sub, feature_importances, n_fold, output_dir):
-    output_folder_path = get_next_run_dir(output_dir)
+def save_importances_and_submission(
+    sub, feature_importances, n_fold, output_folder_path
+):
     submission_path = output_folder_path / "submission.csv"
     feature_importances_path = output_folder_path / "feature_importances.csv"
 
