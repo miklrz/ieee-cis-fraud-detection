@@ -18,7 +18,7 @@ def load_data(dataset_dir):
     test_df = test_transaction.join(test_identity, on="TransactionID", how="left")
     print(f"Dataset sizes | train: {train_df.shape}, test: {test_df.shape}")
 
-    sub = pd.read_csv(os.path.join(dataset_dir, "submission.csv"))
+    sub = pd.read_csv(os.path.join(dataset_dir, "sample_submission.csv"))
     return train_df, test_df, sub
 
 
